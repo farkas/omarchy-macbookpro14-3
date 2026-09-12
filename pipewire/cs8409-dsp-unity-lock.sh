@@ -5,11 +5,20 @@
 set -euo pipefail
 DSP=cs8409_speakers
 
+at_unity() {
+	local percentages volume
+	volume=$(pactl get-sink-volume "$DSP" 2>/dev/null) || return 1
+	percentages=$(printf '%s\n' "$volume" | grep -oE '[0-9]+%' | sort -u)
+	[ "$percentages" = "100%" ]
+}
+
 lock() {
-	pactl set-sink-volume "$DSP" 100% >/dev/null 2>&1 || true
+	at_unity || pactl set-sink-volume "$DSP" 100% >/dev/null 2>&1 || true
 }
 
 lock
-pactl subscribe 2>/dev/null | while read -r _; do
-	lock
+pactl subscribe 2>/dev/null | while read -r event; do
+	case "$event" in
+		"Event 'new' on sink #"* | "Event 'change' on sink #"*) lock ;;
+	esac
 done

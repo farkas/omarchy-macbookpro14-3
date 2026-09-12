@@ -11,8 +11,8 @@ RemainAfterExit=yes
 # (Touch Bar) resolve through cs8409_speakers to that physical sink.
 ExecStart=/usr/bin/amixer -q -c PCH set "Internal Mic" cap unmute 100%
 ExecStart=/usr/bin/amixer -q -c PCH set "Internal Mic Boost" 100%
-ExecStart=/usr/bin/wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 0
-ExecStart=/usr/bin/pactl set-sink-volume cs8409_speakers 100%
+ExecStart=-/usr/bin/wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 0
+ExecStart=-/usr/bin/pactl set-sink-volume cs8409_speakers 100%
 
 [Install]
 WantedBy=default.target
