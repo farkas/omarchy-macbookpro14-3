@@ -3,9 +3,9 @@
 #
 # WHY THIS EXISTS AND WHY IT RUNS LATE
 #   At boot the generic HID drivers claim both iBridge interfaces, and hid-sensor-hub keeps
-#   .0002 — the interface carrying the Touch Bar reports. apple_ibridge reclaims only .0001,
-#   so appletb_probe never finds a device: no sysfs group, no input device, dark strip, and
-#   no error anywhere. This takes .0002 back.
+#   the interface carrying the Touch Bar reports. Its HID instance suffix can change across
+#   kernels, so discover it by driver instead of assuming .0002. apple_ibridge reclaims only
+#   the keyboard interface, so appletb_probe otherwise never finds the Touch Bar device.
 #
 #   It runs after multi-user.target on purpose. Loading these modules from
 #   /etc/modules-load.d/ hangs sysinit.target if anything wedges, and the only recovery is a
@@ -23,9 +23,25 @@ log() { printf '%s %s\n' "$(date '+%H:%M:%S')" "$*"; }
 # attribute exists. Resolve the link instead. Getting this wrong reported a false failure
 # and triggered a pointless module reload that leaked a stale input device each time.
 tb_attr_dir() {
-	local real
-	real=$(readlink -f "/sys/bus/hid/devices/0003:05AC:8600.0001" 2>/dev/null) || return 1
-	[ -n "$real" ] && [ -e "$real/fnmode" ] && { printf '%s' "$real"; return 0; }
+	local dev real
+	for dev in /sys/bus/hid/devices/*05AC*8600*; do
+		[ -e "$dev" ] || continue
+		real=$(readlink -f "$dev" 2>/dev/null) || continue
+		[ -e "$real/fnmode" ] && { printf '%s' "$real"; return 0; }
+	done
+	return 1
+}
+
+touchbar_hid_device() {
+	local dev cur
+	for dev in /sys/bus/hid/devices/*05AC*8600*; do
+		[ -e "$dev" ] || continue
+		cur=$(basename "$(readlink -f "$dev/driver" 2>/dev/null)" 2>/dev/null || echo none)
+		if [ "$cur" = "hid-sensor-hub" ] || [ "$cur" = "hid-generic" ]; then
+			basename "$dev"
+			return 0
+		fi
+	done
 	return 1
 }
 
@@ -43,7 +59,6 @@ done
 [ -n "$KDIR" ] || KDIR="/lib/modules/$(uname -r)/updates/dkms"
 log "using modules from $KDIR"
 WORK=/run/touchbar
-IBDEV=0003:05AC:8600.0002
 HIDDRV=/sys/bus/hid/drivers
 
 # ── 0. is the T1 even alive? ─────────────────────────────────────────────────────────────
@@ -87,9 +102,10 @@ if ! grep -q '^apple_ib_tb ' /proc/modules; then
 	log "apple_ib_tb loaded"
 fi
 
-# ── 3. take interface .0002 back from whichever generic driver holds it ──────────────────
+# ── 3. take the Touch Bar HID interface back from its generic driver ─────────────────────
+IBDEV=$(touchbar_hid_device) || { log "could not find the generic Touch Bar HID interface"; exit 1; }
 cur=$(basename "$(readlink -f "/sys/bus/hid/devices/$IBDEV/driver" 2>/dev/null)" 2>/dev/null || echo none)
-log "interface .0002 currently owned by: $cur"
+log "interface $IBDEV currently owned by: $cur"
 if [ "$cur" != "apple-ibridge-hid" ]; then
 	if [ -e "$HIDDRV/$cur/unbind" ]; then
 		printf '%s' "$IBDEV" > "$HIDDRV/$cur/unbind" 2>/dev/null && log "unbound from $cur"
@@ -124,7 +140,7 @@ else
 	log "FAILED: appletb_probe still did not complete; the strip will be dark"
 fi
 
-# ALS is optional. Load after the TB bind so hid-sensor-hub is already off .0002.
+# ALS is optional. Load after the TB bind so hid-sensor-hub is already off the interface.
 # insmod does not pull deps; apple_ib_als needs industrialio_triggered_buffer.
 if ! grep -q '^apple_ib_als ' /proc/modules; then
 	modprobe industrialio_triggered_buffer 2>/dev/null || log "could not load industrialio_triggered_buffer"
