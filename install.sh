@@ -7,7 +7,14 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")" && pwd)
 USER_NAME="${SUDO_USER:-$USER}"
 USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
-KVER=$(uname -r)
+# Build for the newest installed kernel that has headers. A freshly updated
+# Omarchy system commonly runs the previous kernel until the first reboot.
+KVER=$(find /usr/lib/modules -mindepth 2 -maxdepth 2 \( -type d -o -type l \) -name build \
+	-printf '%h\n' | xargs -r -n1 basename | sort -V | tail -n1)
+if [ -z "$KVER" ]; then
+	echo "No installed kernel headers found under /usr/lib/modules" >&2
+	exit 1
+fi
 
 step=${1:-all}
 
@@ -22,11 +29,7 @@ install_firmware() {
 
 install_cs8409() {
 	echo "==> CS8409 DKMS (davidjo)"
-	if grep -q '^snd_hda_codec_cs8409 ' /proc/modules; then
-		echo "    already loaded — skip clone/build"
-		return 0
-	fi
-	"$ROOT/scripts/install-cs8409-dkms.sh"
+	"$ROOT/scripts/install-cs8409-dkms.sh" "$KVER"
 }
 
 install_keyd() {
@@ -54,7 +57,7 @@ install_ibridge() {
 	mkdir -p /usr/src/appleibridge-0.1
 	cp "$ROOT"/drivers/appleibridge/{apple-ib-als.c,apple-ib-tb.c,apple-ibridge.c,apple-ibridge.h,Makefile,dkms.conf} \
 		/usr/src/appleibridge-0.1/
-	if dkms status appleibridge/0.1 2>/dev/null | grep -q installed; then
+	if dkms status appleibridge/0.1 2>/dev/null | grep -q .; then
 		dkms remove -m appleibridge -v 0.1 --all || true
 	fi
 	dkms add -m appleibridge -v 0.1
@@ -66,11 +69,17 @@ install_ibridge() {
 	install -Dm644 "$ROOT/systemd/touchbar.service" /etc/systemd/system/touchbar.service
 	systemctl daemon-reload
 	systemctl enable touchbar.service
-	systemctl start touchbar.service
+	if [ "$KVER" = "$(uname -r)" ]; then
+		systemctl start touchbar.service
+	else
+		echo "    built for $KVER; touchbar.service enabled for next boot"
+	fi
 	# Fn watcher needs the TB sysfs; it is WantedBy=touchbar.service so a
 	# later boot starts it after this oneshot. Start it now too.
-	systemctl enable --now touchbar-fn.service
-	systemctl restart touchbar-fn.service
+	systemctl enable touchbar-fn.service
+	if systemctl is-active --quiet touchbar.service; then
+		systemctl restart touchbar-fn.service
+	fi
 }
 
 install_boot() {
